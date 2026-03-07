@@ -30,7 +30,7 @@ env:
 
   # 配置文件
   DEFCONFIG_SOURCE: ""
-  DEFCONFIG_NAME : "arch/arm64/configs/vendor/xiaomi/cmi.config"
+  DEFCONFIG_NAME : "vendor/xiaomi/cmi.config"
   DEFCONFIG_ORIGIN_IMAGE: ""
   DEFCONFIG_FROM_BOOT: false
 
