@@ -9,28 +9,28 @@ env:
   DEVICE_NAME : "小米10pro"
   DEVICE_CODENAME : "cmi"
 
-  # 编译工具链配置（修复 LLVM 汇编器兼容）
+  # 编译工具链配置（降级LLVM适配老内核，关闭LLVM汇编器）
   CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
-  EXTRA_CMDS : "LD=ld.lld LLVM=1 LLVM_IAS=1 AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump"
+  EXTRA_CMDS : "LD=ld.lld LLVM=1"  # 移除 LLVM_IAS=1，改用GNU汇编器
 
   # 内核源码（确认分支适配 Android 16）
   KERNEL_SOURCE : "https://github.com/wsmnb6/kernel_xiaomi_sm8250_mod"
   KERNEL_BRANCH : "android16-aptusitu-rksu"
 
-  # LLVM 19 工具链（适配 ARM64 32位 VDSO 编译）
-  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
+  # 降级LLVM到16（对4.19内核兼容性更好）
+  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.6/LLVM-16.0.6-Linux-X64.tar.xz"
   CLANG_BRANCH : ""
 
   # GCC 工具链（32位兼容编译依赖）
-  GCC_GNU : true  # 改为 true，LLVM 编译 32 位 VDSO 需要 GCC 辅助
+  GCC_GNU : true  
   GCC_64_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9.git"
   GCC_64_BRANCH : "android12L-release"
   GCC_32_SOURCE : "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9.git"
   GCC_32_BRANCH : "android12L-release"
 
-  # 配置文件
+  # 配置文件（修正后缀+指定标准路径）
   DEFCONFIG_SOURCE: ""
-  DEFCONFIG_NAME : "cmi.deconfig"
+  DEFCONFIG_NAME : "arch/arm64/configs/cmi_defconfig"  # 正确路径+后缀
   DEFCONFIG_ORIGIN_IMAGE: ""
   DEFCONFIG_FROM_BOOT: false
 
@@ -71,7 +71,7 @@ env:
   HIDE_STUFF: "false"
   GENERATE_DTB: "false"
   GENERATE_CHIP: "qcom"
-  BUILD_DEBUGGER: "true"  # 开启编译调试，便于定位错误
+  BUILD_DEBUGGER: "true"  
   SKIP_PATCH: "false"
   BUILD_OTHER_CONFIG: "false"
   MERGE_CONFIG_FILES: "vendor/debugfs.config,vendor/lahaina_QGKI.config"
@@ -80,7 +80,7 @@ env:
 jobs:
   build-kernel:
     name: Build Kernel
-    runs-on: ubuntu-22.04  # 改用 22.04 更稳定，避免最新版兼容问题
+    runs-on: ubuntu-22.04  
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
@@ -102,15 +102,27 @@ jobs:
       - name: 🔗 Patch for no-kprobe
         uses: ./.github/workflows/patch-no-kprobe
 
-      - name: 🪛 Extra Kernel Options (修复汇编错误核心步骤)
+      - name: 🪛 Extra Kernel Options（修复核心问题）
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
-          # 修复 sigreturn.S mov 指令立即数错误
+          
+          # 1. 先验证配置文件是否存在
+          if [ ! -f "$DEFCONFIG_NAME" ]; then
+              echo "⚠️ 配置文件不存在，尝试搜索正确路径..."
+              find . -name "cmi_defconfig"
+              exit 1
+          fi
+          
+          # 2. 修复 sigreturn.S 汇编错误
           sed -i 's/mov r7, #__NR_compat_rt_sigreturn/movw r7, #:lower16:__NR_compat_rt_sigreturn\n\tmovt r7, #:upper16:__NR_compat_rt_sigreturn/' arch/arm64/kernel/vdso32/sigreturn.S
-          # 修复 .pad 指令偏移量错误
           sed -i 's/\.pad #COMPAT_SIGFRAME_REGS_OFFSET/.set COMPAT_SIGFRAME_REGS_OFFSET_VAL, COMPAT_SIGFRAME_REGS_OFFSET\n\t.pad #COMPAT_SIGFRAME_REGS_OFFSET_VAL/' arch/arm64/kernel/vdso32/sigreturn.S
-          # 禁用不必要的 32 位 VDSO 调试选项（可选）
-          echo "CONFIG_COMPAT_VDSO_DEBUG=n" >> $DEFCONFIG_NAME
+          
+          # 3. 规范修改配置（先加载配置，再用内核工具修改，避免语法错误）
+          make $DEFCONFIG_NAME
+          ./scripts/config --disable CONFIG_COMPAT_VDSO_DEBUG  # 禁用调试选项
+          
+          # 4. 清理旧配置缓存
+          make clean
 
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
